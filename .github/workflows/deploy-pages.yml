@@ -1,0 +1,69 @@
+# Build the viewer and publish it to GitHub Pages.
+#
+# The static build ships with NO backend baked in (VITE_ZOOM_API_ORIGIN unset),
+# so users point it at a backend on their own node at runtime via the
+# "Connect to server" dialog. VITE_BASE must match the Pages sub-path: for a
+# project site it is "/<repo>/" (here /cellpheno-frontend/); for a custom domain
+# or user/org site, set it to "/".
+name: Deploy viewer to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      # The `niivue-react` dependency is a `github:` git dep; pnpm clones it over
+      # SSH, which has no key on the runner. Rewrite GitHub SSH URLs to anonymous
+      # HTTPS (works for the public repo).
+      - name: Use HTTPS for GitHub git dependencies
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+      - run: pnpm install --frozen-lockfile
+      - name: Build
+        env:
+          # Relative asset base so the build works BOTH at the custom-domain root
+          # (https://cellpheno-viewer.ziquanw.com/) and the project Pages sub-path
+          # (https://chrisa142857.github.io/cellpheno-viewer/). The app uses a hash
+          # router, so all routes live under index.html and relative assets resolve.
+          VITE_BASE: ./
+        run: pnpm build
+      - uses: actions/configure-pages@v5
+        with:
+          # Enable Pages (build_type=workflow) from the workflow, so it doesn't
+          # depend on the repo Settings -> Pages source being set by hand.
+          enablement: true
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

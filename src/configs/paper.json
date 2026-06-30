@@ -1,0 +1,4 @@
+{
+  "title": "CellPheno: A High-throughput Computational Platform for Quantifying Cellular Resolution Whole Brain Microscopy Images",
+  "abstract": "Advances in tissue clearing and light-sheet microscopy enable cellular resolution whole-brain 3D imaging. However, whole-brain quantification tools do not yet meet demands for efficiency or assess morphometry. Here we present CellPheno, a 3D nuclei instance segmentation framework for high-throughput cellular phenotyping. CellPheno quantifies an entire P4 mouse brain within 15 hours. We showcase whole-brain morphometry, enhanced stitching, and co-localization across multiple cell types in 53 brains."
+}
