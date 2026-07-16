@@ -1,5 +1,5 @@
 import React from "react";
-import { Modal, Input, Form, Typography, Alert } from "antd";
+import { Modal, Input, Form, Typography, Alert, Collapse } from "antd";
 import { Server } from "lucide-react";
 import {
     getServerConfig,
@@ -27,7 +27,13 @@ const btnBase =
 // plain-HTTP origin would be blocked as mixed content — http://localhost is the
 // exception, hence the tunnel rather than pointing straight at yukon.
 const YUKON_ORIGIN = "http://localhost:8090";
-const YUKON_TUNNEL_CMD = "ssh -N -L 8090:localhost:8090 yukon";
+const ONYEN_PLACEHOLDER = "[Onyen]";
+
+// yukon is only reachable through the raptor jump host, so -J is not optional.
+const yukonTunnelCmd = (onyen: string): string => {
+    const u = onyen.trim() || ONYEN_PLACEHOLDER;
+    return `ssh -N -L 8090:localhost:8090 ${u}@yukon.acm.unc.edu -J ${u}@raptor.acm.unc.edu`;
+};
 
 /**
  * "Connect to cellpheno server" dialog: point the viewer at a backend on the
@@ -37,7 +43,24 @@ const ConnectServer: React.FC = () => {
     const [open, setOpen] = React.useState(false);
     const [cfg, setCfg] = React.useState<ServerConfig>(getServerConfig);
     const [test, setTest] = React.useState<TestState>({ status: "idle" });
+    // Remembered so the ssh line is ready next time, not retyped each visit.
+    const [onyen, setOnyen] = React.useState(() => {
+        try {
+            return localStorage.getItem("cellpheno.onyen") ?? "";
+        } catch {
+            return "";
+        }
+    });
     const overridden = hasServerOverride();
+
+    const updateOnyen = (v: string) => {
+        setOnyen(v);
+        try {
+            localStorage.setItem("cellpheno.onyen", v.trim());
+        } catch {
+            /* storage disabled — the command still works, it just won't persist */
+        }
+    };
 
     const openDialog = () => {
         setCfg(getServerConfig());
@@ -108,6 +131,7 @@ const ConnectServer: React.FC = () => {
             <Modal
                 title="Connect to cellpheno server"
                 open={open}
+                width={640}
                 onCancel={() => setOpen(false)}
                 footer={
                     <div className="flex items-center justify-end gap-2 pt-2">
@@ -142,58 +166,87 @@ const ConnectServer: React.FC = () => {
                     browser; saving reloads the page.
                 </Typography.Paragraph>
 
-                <div className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <div className="mb-1.5 text-sm font-semibold text-slate-800">
-                        ACMLab: connect to yukon
-                    </div>
-                    <div className="text-sm text-slate-600">
-                        Run this on your machine and leave it open, then click{" "}
-                        <b>Use yukon</b>:
-                    </div>
-                    <div className="mt-1.5">
-                        <Typography.Text code copyable={{ text: YUKON_TUNNEL_CMD }}>
-                            {YUKON_TUNNEL_CMD}
-                        </Typography.Text>
-                        <button
-                            type="button"
-                            onClick={useYukon}
-                            className={`${btnBase} ml-2 border border-blue-300 text-blue-700 hover:bg-blue-50`}
-                        >
-                            Use yukon
-                        </button>
-                    </div>
-                </div>
-
-                <Form layout="vertical">
-                    <Form.Item
-                        label="On-demand zoom service origin"
-                        help="nis_ondemand_viewer, e.g. http://localhost:8090. Serves the brain list, density maps and zoom cubes."
-                    >
-                        <Input
-                            placeholder="http://localhost:8090"
-                            value={cfg.zoomApiOrigin}
-                            onChange={(e) => update({ zoomApiOrigin: e.target.value })}
-                            allowClear
-                        />
-                    </Form.Item>
-                    <Form.Item
-                        label="MinIO origin (optional)"
-                        help="Only needed if not using the zoom service for the brain list."
-                    >
-                        <Input
-                            placeholder="http://localhost:8080"
-                            value={cfg.minioOrigin}
-                            onChange={(e) => update({ minioOrigin: e.target.value })}
-                        />
-                    </Form.Item>
-                    <Form.Item label="MinIO bucket">
-                        <Input
-                            placeholder="brainmapp14"
-                            value={cfg.minioBucket}
-                            onChange={(e) => update({ minioBucket: e.target.value })}
-                        />
-                    </Form.Item>
-                </Form>
+                <Collapse
+                    className="mb-4"
+                    items={[
+                        {
+                            key: "acmlab",
+                            label: <span className="text-sm font-medium">ACMLab user</span>,
+                            children: (
+                                <div className="space-y-2">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-sm text-slate-600">Onyen</span>
+                                        <Input
+                                            size="small"
+                                            placeholder="your onyen"
+                                            value={onyen}
+                                            onChange={(e) => updateOnyen(e.target.value)}
+                                            className="max-w-[160px]"
+                                        />
+                                    </div>
+                                    <div className="text-sm text-slate-600">
+                                        Run this on your machine and leave it open, then click{" "}
+                                        <b>Use yukon</b>:
+                                    </div>
+                                    {/* break-all: the command is ~90 chars and must not
+                                        push the copy icon onto its own line. */}
+                                    <div className="break-all">
+                                        <Typography.Text
+                                            code
+                                            copyable={{ text: yukonTunnelCmd(onyen) }}
+                                            className="!text-xs"
+                                        >
+                                            {yukonTunnelCmd(onyen)}
+                                        </Typography.Text>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={useYukon}
+                                        className={`${btnBase} border border-blue-300 text-blue-700 hover:bg-blue-50`}
+                                    >
+                                        Use yukon
+                                    </button>
+                                </div>
+                            ),
+                        },
+                        {
+                            key: "others",
+                            label: <span className="text-sm font-medium">Others</span>,
+                            children: (
+                                <Form layout="vertical">
+                                    <Form.Item
+                                        label="On-demand zoom service origin"
+                                        help="nis_ondemand_viewer, e.g. http://localhost:8090. Serves the brain list, density maps and zoom cubes."
+                                    >
+                                        <Input
+                                            placeholder="http://localhost:8090"
+                                            value={cfg.zoomApiOrigin}
+                                            onChange={(e) => update({ zoomApiOrigin: e.target.value })}
+                                            allowClear
+                                        />
+                                    </Form.Item>
+                                    <Form.Item
+                                        label="MinIO origin (optional)"
+                                        help="Only needed if not using the zoom service for the brain list."
+                                    >
+                                        <Input
+                                            placeholder="http://localhost:8080"
+                                            value={cfg.minioOrigin}
+                                            onChange={(e) => update({ minioOrigin: e.target.value })}
+                                        />
+                                    </Form.Item>
+                                    <Form.Item label="MinIO bucket" className="!mb-0">
+                                        <Input
+                                            placeholder="brainmapp14"
+                                            value={cfg.minioBucket}
+                                            onChange={(e) => update({ minioBucket: e.target.value })}
+                                        />
+                                    </Form.Item>
+                                </Form>
+                            ),
+                        },
+                    ]}
+                />
 
                 {test.status === "ok" && <Alert type="success" showIcon message={test.detail} />}
                 {test.status === "error" && <Alert type="error" showIcon message={test.detail} />}
