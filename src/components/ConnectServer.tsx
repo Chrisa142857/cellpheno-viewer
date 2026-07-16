@@ -23,6 +23,12 @@ type TestState =
 const btnBase =
     "inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed";
 
+// The lab backend listens on yukon:8090. This page is served over HTTPS, so a
+// plain-HTTP origin would be blocked as mixed content — http://localhost is the
+// exception, hence the tunnel rather than pointing straight at yukon.
+const YUKON_ORIGIN = "http://localhost:8090";
+const YUKON_TUNNEL_CMD = "ssh -N -L 8090:localhost:8090 yukon";
+
 /**
  * "Connect to cellpheno server" dialog: point the viewer at a backend on the
  * user's own node at runtime (persisted in localStorage; saving reloads).
@@ -44,8 +50,8 @@ const ConnectServer: React.FC = () => {
         setTest({ status: "idle" });
     };
 
-    const testConnection = async () => {
-        const origin = cfg.zoomApiOrigin.trim().replace(/\/+$/, "");
+    const testConnection = async (originOverride?: string) => {
+        const origin = (originOverride ?? cfg.zoomApiOrigin).trim().replace(/\/+$/, "");
         if (!origin) {
             setTest({ status: "error", detail: "Enter a zoom service origin to test." });
             return;
@@ -69,6 +75,13 @@ const ConnectServer: React.FC = () => {
                     `SSH tunnel to http://localhost.`,
             });
         }
+    };
+
+    // One-click ACMLab setup: fill in the tunnelled origin and verify it, so the
+    // only manual step is running the ssh line.
+    const useYukon = () => {
+        setCfg((c) => ({ ...c, zoomApiOrigin: YUKON_ORIGIN }));
+        void testConnection(YUKON_ORIGIN);
     };
 
     const save = () => {
@@ -108,7 +121,7 @@ const ConnectServer: React.FC = () => {
                         </button>
                         <button
                             type="button"
-                            onClick={testConnection}
+                            onClick={() => testConnection()}
                             disabled={test.status === "testing"}
                             className={`${btnBase} border border-slate-300 text-slate-700 hover:bg-slate-100`}
                         >
@@ -128,6 +141,28 @@ const ConnectServer: React.FC = () => {
                     Point this viewer at a backend running on your node. Values are stored in this
                     browser; saving reloads the page.
                 </Typography.Paragraph>
+
+                <div className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <div className="mb-1.5 text-sm font-semibold text-slate-800">
+                        ACMLab: connect to yukon
+                    </div>
+                    <div className="text-sm text-slate-600">
+                        Run this on your machine and leave it open, then click{" "}
+                        <b>Use yukon</b>:
+                    </div>
+                    <div className="mt-1.5">
+                        <Typography.Text code copyable={{ text: YUKON_TUNNEL_CMD }}>
+                            {YUKON_TUNNEL_CMD}
+                        </Typography.Text>
+                        <button
+                            type="button"
+                            onClick={useYukon}
+                            className={`${btnBase} ml-2 border border-blue-300 text-blue-700 hover:bg-blue-50`}
+                        >
+                            Use yukon
+                        </button>
+                    </div>
+                </div>
 
                 <Form layout="vertical">
                     <Form.Item
