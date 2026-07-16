@@ -5,6 +5,7 @@ import {fetchBrainImg} from "@/api";
 import useBrainStore from "@/stores/brain.ts";
 import {BrainRes} from "@/types/user";
 import LoadingProgress from "@/components/LoadingProgress";
+import ConnectServer from "@/components/ConnectServer";
 // Inline style below, not a Tailwind bg-[url(...)]: an arbitrary Tailwind URL
 // can't reference this hashed import.
 import backUrl from "@/assets/back.png";
@@ -64,9 +65,8 @@ const ResultDisplay: React.FC = () => {
                         <div className="py-6 text-sm text-rose-300">
                             <div className="font-medium">Couldn’t reach the server.</div>
                             <div className="mt-1 text-rose-300/70">{errorMsg}</div>
-                            <div className="mt-2 text-cyan-300/80">
-                                Use <span className="font-semibold">Connect to server</span> (top bar) and
-                                check your backend / SSH tunnel.
+                            <div className="mt-4 flex justify-center">
+                                <ConnectServer />
                             </div>
                         </div>
                     )}

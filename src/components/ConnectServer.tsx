@@ -63,7 +63,10 @@ const ConnectServer: React.FC = () => {
     };
 
     const openDialog = () => {
-        setCfg(getServerConfig());
+        const saved = getServerConfig();
+        // Default to the tunnelled origin so the ACMLab path is just: ssh, then
+        // Connect & Test. Anything already configured wins.
+        setCfg({ ...saved, zoomApiOrigin: saved.zoomApiOrigin || YUKON_ORIGIN });
         setTest({ status: "idle" });
         setOpen(true);
     };
@@ -73,41 +76,39 @@ const ConnectServer: React.FC = () => {
         setTest({ status: "idle" });
     };
 
-    const testConnection = async (originOverride?: string) => {
-        const origin = (originOverride ?? cfg.zoomApiOrigin).trim().replace(/\/+$/, "");
+    const testConnection = async (): Promise<boolean> => {
+        const origin = cfg.zoomApiOrigin.trim().replace(/\/+$/, "");
         if (!origin) {
-            setTest({ status: "error", detail: "Enter a zoom service origin to test." });
-            return;
+            setTest({ status: "error", detail: "Enter a zoom service origin to connect to." });
+            return false;
         }
         setTest({ status: "testing" });
         try {
             const res = await fetch(`${origin}/healthz`, { method: "GET" });
             if (!res.ok) {
                 setTest({ status: "error", detail: `HTTP ${res.status} from ${origin}/healthz` });
-                return;
+                return false;
             }
             const body = await res.json().catch(() => ({}));
             const backend = body?.tiff_backend ? ` · backend: ${body.tiff_backend}` : "";
-            setTest({ status: "ok", detail: `Connected${backend}` });
+            setTest({ status: "ok", detail: `Connected${backend} — reloading…` });
+            return true;
         } catch {
             setTest({
                 status: "error",
                 detail:
-                    `Could not reach ${origin}. If this page is HTTPS and the server is plain ` +
-                    `HTTP, the browser blocks it (mixed content) — use an https:// origin or an ` +
-                    `SSH tunnel to http://localhost.`,
+                    `Could not reach ${origin}. Check that the SSH tunnel is running. (If this ` +
+                    `page is HTTPS and the server is plain HTTP, the browser blocks it — hence ` +
+                    `the tunnel to http://localhost.)`,
             });
+            return false;
         }
     };
 
-    // One-click ACMLab setup: fill in the tunnelled origin and verify it, so the
-    // only manual step is running the ssh line.
-    const useYukon = () => {
-        setCfg((c) => ({ ...c, zoomApiOrigin: YUKON_ORIGIN }));
-        void testConnection(YUKON_ORIGIN);
-    };
-
-    const save = () => {
+    // Test first, save only if it answered: saving reloads, so a bad origin would
+    // otherwise reload into a broken viewer with no clue why.
+    const connectAndTest = async () => {
+        if (!(await testConnection())) return;
         saveServerConfig(cfg);
         window.location.reload();
     };
@@ -141,29 +142,22 @@ const ConnectServer: React.FC = () => {
                             disabled={!overridden}
                             className={`${btnBase} border border-red-300 text-red-600 hover:bg-red-50`}
                         >
-                            Reset to default
+                            Reset
                         </button>
                         <button
                             type="button"
-                            onClick={() => testConnection()}
+                            onClick={connectAndTest}
                             disabled={test.status === "testing"}
-                            className={`${btnBase} border border-slate-300 text-slate-700 hover:bg-slate-100`}
-                        >
-                            {test.status === "testing" ? "Testing…" : "Test connection"}
-                        </button>
-                        <button
-                            type="button"
-                            onClick={save}
                             className={`${btnBase} bg-blue-600 text-white hover:bg-blue-700`}
                         >
-                            Save &amp; reconnect
+                            {test.status === "testing" ? "Connecting…" : "Connect & Test"}
                         </button>
                     </div>
                 }
             >
                 <Typography.Paragraph type="secondary">
-                    Point this viewer at a backend running on your node. Values are stored in this
-                    browser; saving reloads the page.
+                    Point this viewer at a backend running on your node. <b>Connect &amp; Test</b>{" "}
+                    checks the server, then stores the settings in this browser and reloads.
                 </Typography.Paragraph>
 
                 <Collapse
@@ -185,8 +179,8 @@ const ConnectServer: React.FC = () => {
                                         />
                                     </div>
                                     <div className="text-sm text-slate-600">
-                                        Run this on your machine and leave it open, then click{" "}
-                                        <b>Use yukon</b>:
+                                        Run this on your machine, leave it open, then click{" "}
+                                        <b>Connect &amp; Test</b>:
                                     </div>
                                     {/* break-all: the command is ~90 chars and must not
                                         push the copy icon onto its own line. */}
@@ -199,13 +193,6 @@ const ConnectServer: React.FC = () => {
                                             {yukonTunnelCmd(onyen)}
                                         </Typography.Text>
                                     </div>
-                                    <button
-                                        type="button"
-                                        onClick={useYukon}
-                                        className={`${btnBase} border border-blue-300 text-blue-700 hover:bg-blue-50`}
-                                    >
-                                        Use yukon
-                                    </button>
                                 </div>
                             ),
                         },
