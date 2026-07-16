@@ -8,7 +8,7 @@ import React, {
   useEffect,
   useMemo,
 } from "react";
-import { MINIO_ORIGIN, ZOOM_API_ORIGIN } from "@/configs/minio";
+import { DEMO_ORIGIN, MINIO_ORIGIN, ZOOM_API_ORIGIN } from "@/configs/minio";
 import LoadingProgress, { getLoadEst, recordLoadEst } from "@/components/LoadingProgress";
 
 // 定义常量和接口
@@ -86,6 +86,20 @@ interface CrosshairLocation {
 const cubesz_xy = 5;
 const cubesz_z = 3;
 
+// Cached per-brain demo manifest (the pre-materialized grid cells to snap clicks to).
+// A dead origin (S3/MinIO down, tunnel closed, CORS) surfaces as an opaque
+// "Failed to fetch"; say what that actually means to the user.
+const describeFetchError = (err: unknown): string => {
+  const msg = String((err as Error)?.message ?? err);
+  return /Failed to fetch|NetworkError|Load failed/i.test(msg) ? "Server unreachable" : msg;
+};
+
+const demoManifestCache: Record<string, Promise<{ grid: number[][] }>> = {};
+const getDemoManifest = (brain: string): Promise<{ grid: number[][] }> =>
+  (demoManifestCache[brain] ??= fetch(
+    `${DEMO_ORIGIN}/demo/${encodeURIComponent(brain)}/manifest.json`
+  ).then((r) => r.json()));
+
 // 从后端获取放大视图数据的服务
 const fetchZoomVolumes = async (
   coordinates: number[],
@@ -93,7 +107,7 @@ const fetchZoomVolumes = async (
   scale: number = 1,
   dx: number = 0,
   dy: number = 0
-): Promise<{ volumes: VolumeConfig; tilesUrl: string }> => {
+): Promise<{ volumes: VolumeConfig; tilesUrl: string; error?: string }> => {
   const xStr = (Math.floor(coordinates[0] / cubesz_xy) * cubesz_xy)
     .toString()
     .padStart(3, "0");
@@ -120,6 +134,39 @@ const fetchZoomVolumes = async (
   const apiX = coordinates[1];
   const apiY = coordinates[2];
   const apiZ = coordinates[0];
+
+  // Static demo: no server. Snap to the nearest pre-materialized grid cell and
+  // build the cube/overlay URLs directly (no /zoom/info, no dx/dy QC).
+  if (!useZoomApi && DEMO_ORIGIN) {
+    try {
+      const man = await getDemoManifest(brainId);
+      const grid = man.grid ?? [];
+      if (!grid.length) return { volumes: {}, tilesUrl: "" };
+      let best = grid[0];
+      let bd = Infinity;
+      for (const c of grid) {
+        const d = (c[0] - apiX) ** 2 + (c[1] - apiY) ** 2 + (c[2] - apiZ) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = c;
+        }
+      }
+      const p = (n: number) => String(n).padStart(3, "0");
+      const cell = `${p(best[0])}_${p(best[1])}_${p(best[2])}`;
+      const b = `${DEMO_ORIGIN}/demo/${encodeURIComponent(brainId)}`;
+      return {
+        volumes: {
+          rawImage: `${b}/s${scale}/${cell}_raw.nii.gz`,
+          nis3d: `${b}/s${scale}/${cell}_nis.nii.gz`,
+        },
+        tilesUrl: `${b}/tiles/${cell}.nii.gz`,
+      };
+    } catch (e) {
+      console.error("demo fetch failed", e);
+      return { volumes: {}, tilesUrl: "", error: describeFetchError(e) };
+    }
+  }
+
   const jsonUrl = useZoomApi
     ? `${ZOOM_API_ORIGIN}/zoom/info?brain=${encodeURIComponent(brainId)}` +
       `&x=${apiX}&y=${apiY}&z=${apiZ}&scale=${scale}&dx=${dx}&dy=${dy}`
@@ -160,7 +207,9 @@ const fetchZoomVolumes = async (
     return { volumes: res, tilesUrl };
   } catch (error) {
     console.error("Error fetching zoom volumes:", error);
-    return { volumes: {}, tilesUrl: "" };
+    // Don't swallow: an empty result is indistinguishable from "no data at this
+    // spot", which made a server outage look like a dead click.
+    return { volumes: {}, tilesUrl: "", error: describeFetchError(error) };
   }
 };
 
@@ -379,6 +428,8 @@ interface ProgressiveVolumes {
   progress: number;
   /** Real remaining seconds. */
   etaSec: number;
+  /** Set when the download failed (server down, 404, CORS). Render it. */
+  error: string | null;
 }
 
 /**
@@ -394,11 +445,13 @@ function useProgressiveVolumes(source: NVRVolume[], estKey = "zoom1"): Progressi
   // changes, so changing a volume's opacity/colormap does NOT re-fetch.
   const [blobMap, setBlobMap] = useState<Record<string, string>>({});
   const [prog, setProg] = useState({ loading: false, progress: 0, etaSec: 0 });
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (source.length === 0) {
       setBlobMap({});
       setProg({ loading: false, progress: 0, etaSec: 0 });
+      setError(null);
       return;
     }
     let cancelled = false;
@@ -411,6 +464,7 @@ function useProgressiveVolumes(source: NVRVolume[], estKey = "zoom1"): Progressi
 
     setBlobMap({}); // clears -> "not ready" -> empty volumes while downloading
     setProg({ loading: true, progress: 0, etaSec: getLoadEst(estKey) / 1000 });
+    setError(null);
 
     const report = () => {
       if (cancelled) return;
@@ -474,8 +528,12 @@ function useProgressiveVolumes(source: NVRVolume[], estKey = "zoom1"): Progressi
         if (cancelled || err?.name === "AbortError") return;
         window.clearInterval(ticker);
         console.error("Volume download failed:", err);
-        setBlobMap(Object.fromEntries(source.map((v) => [v.url, v.url]))); // fall back to direct URLs
-        setProg({ loading: false, progress: 1, etaSec: 0 });
+        // Surface the failure instead of handing NiiVue the same URLs that just
+        // failed: it would fail silently too and leave the view spinning until
+        // useNiivueReady's 120s timeout, which reads as a hang, not an outage.
+        setBlobMap({});
+        setProg({ loading: false, progress: 0, etaSec: 0 });
+        setError(describeFetchError(err));
       });
 
     return () => {
@@ -506,8 +564,19 @@ function useProgressiveVolumes(source: NVRVolume[], estKey = "zoom1"): Progressi
     [source, blobMap, ready]
   );
 
-  return { volumes, loading: prog.loading, progress: prog.progress, etaSec: prog.etaSec };
+  return { volumes, loading: prog.loading, progress: prog.progress, etaSec: prog.etaSec, error };
 }
+
+// Shown in place of a view whose volumes couldn't be downloaded.
+const LoadError: React.FC<{ msg: string; what: string }> = ({ msg, what }) => (
+  <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-slate-950/80 p-4 text-center">
+    <div className="text-sm font-medium text-rose-300">Couldn’t load {what}</div>
+    <div className="text-xs text-rose-300/70">{msg}</div>
+    <div className="mt-1 text-xs text-cyan-300/80">
+      Check <span className="font-semibold">Connect to server</span> (top bar) or your storage backend.
+    </div>
+  </div>
+);
 
 // 主视图组件
 interface MainNiiViewProps {
@@ -579,6 +648,7 @@ const MainNiiView: React.FC<MainNiiViewProps> = React.memo(
             </span>
           </div>
         )}
+        {dl.error && <LoadError msg={dl.error} what="the brain map" />}
         <LoadingProgress
           active={dl.loading || decoding}
           label={dl.loading ? "Loading brain map" : "Rendering brain map"}
@@ -735,6 +805,7 @@ const ZoomView: React.FC<ZoomViewProps> = React.memo(
               progress={dl.loading ? dl.progress : 0.99}
               etaSec={dl.loading ? dl.etaSec : 0}
             />
+            {dl.error && <LoadError msg={dl.error} what={`the ${scale}× cube`} />}
           </div>
         )}
       </div>
@@ -798,6 +869,7 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
 
   // /zoom/info fetch in flight.
   const [isLoadingZoom, setIsLoadingZoom] = useState(false);
+  const [zoomError, setZoomError] = useState<string | null>(null);
 
   // Dedup: skip refetching the same clicked coordinate (+ stitch offset).
   const currentRequestRef = useRef<string | null>(null);
@@ -819,10 +891,11 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
       if (coordinatesKey === currentRequestRef.current) return; // dedup
       currentRequestRef.current = coordinatesKey;
       setIsLoadingZoom(true);
+      setZoomError(null);
       try {
         const results = await Promise.all(
           ZOOM_SCALES.map(async (scale) => {
-            const { volumes: cfg, tilesUrl: tUrl } = await fetchZoomVolumes(
+            const { volumes: cfg, tilesUrl: tUrl, error: err } = await fetchZoomVolumes(
               coordinates,
               brainId,
               scale,
@@ -835,7 +908,7 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
               if (key.includes("rawImage")) raw = u;
               else if (key.includes("nis")) nis = u;
             });
-            return { scale, raw, nis, tUrl };
+            return { scale, raw, nis, tUrl, err };
           })
         );
         // Stale-request guard: a newer click superseded this one.
@@ -845,6 +918,9 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
         // the many tiles a wide 16x window would span.
         setTilesUrl(results.find((r) => r.scale === ZOOM_DETAIL_SCALE)?.tUrl ?? results[0]?.tUrl ?? "");
         if (results.every((r) => !r.raw && !r.nis)) {
+          // Distinguish an outage from a genuinely empty spot, so a click during
+          // an outage reports the outage instead of appearing to do nothing.
+          setZoomError(results.find((r) => r.err)?.err ?? null);
           setZoomViews((draft) => {
             Object.keys(draft).forEach((k) => delete draft[Number(k)]);
           });
@@ -873,6 +949,7 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
         });
       } catch (error) {
         console.error("Error fetching zoom volumes:", error);
+        setZoomError(describeFetchError(error));
         currentRequestRef.current = null; // allow retry of this coordinate
       } finally {
         setIsLoadingZoom(false);
@@ -998,8 +1075,18 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
             overlayUrl={showTiles && tilesUrl ? tilesUrl : undefined}
           />
           {!hasZoom && (
-            <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border border-cyan-500/30 bg-slate-900/85 px-3 py-1 text-xs text-cyan-200/90 shadow-lg">
-              {isLoadingZoom ? "Locating zoom…" : "Click the brain to open 1× / 8× / 16× zoom views"}
+            <div
+              className={`pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border bg-slate-900/85 px-3 py-1 text-xs shadow-lg ${
+                zoomError
+                  ? "border-rose-500/40 text-rose-200/90"
+                  : "border-cyan-500/30 text-cyan-200/90"
+              }`}
+            >
+              {zoomError
+                ? `Couldn’t load zoom — ${zoomError}`
+                : isLoadingZoom
+                  ? "Locating zoom…"
+                  : "Click the brain to open 1× / 8× / 16× zoom views"}
             </div>
           )}
         </div>
@@ -1008,7 +1095,8 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
       {/* Zoom views: collapsible 1× / 8× / 16× accordion */}
       {hasZoom && (
         <div className="flex min-h-0 flex-1 flex-col gap-2">
-          {/* Stitching QC: nudge tiles to check seam alignment in the stitched cubes */}
+          {/* Stitching QC: nudge tiles to check seam alignment (live server only) */}
+          {ZOOM_API_ORIGIN !== "" && (
           <div className="flex shrink-0 items-center gap-3 rounded-lg bg-slate-900/50 px-3 py-1 text-[11px] text-slate-300 ring-1 ring-cyan-500/10">
             <span className="font-semibold text-cyan-300">Stitch QC</span>
             <label className="flex items-center gap-1">
@@ -1049,6 +1137,7 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
             </button>
             <span className="text-slate-500">nudges tiles per step to align seams</span>
           </div>
+          )}
           {ZOOM_SCALES.map((scale) => {
             const v = zoomViews[scale];
             if (!v || (!v.raw && !v.nis)) return null;

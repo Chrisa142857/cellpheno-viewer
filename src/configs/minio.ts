@@ -28,6 +28,10 @@ const DEFAULT_MINIO_ORIGIN =
     import.meta.env.VITE_MINIO_ORIGIN ?? `${window.location.protocol}//localhost:8080`;
 const DEFAULT_MINIO_BUCKET = import.meta.env.VITE_MINIO_BUCKET ?? "brainmapp14";
 const DEFAULT_ZOOM_API_ORIGIN = import.meta.env.VITE_ZOOM_API_ORIGIN ?? "";
+// Static demo origin (e.g. a Cloudflare R2 public bucket) holding pre-materialized
+// cubes for 1-2 brains. When set and no live zoom server is connected, those brains
+// are served statically -- no backend/tunnel needed.
+export const DEMO_ORIGIN = normalizeOrigin(import.meta.env.VITE_DEMO_ORIGIN ?? "");
 
 export interface ServerConfig {
     /** On-demand zoom service origin (nis_ondemand_viewer). Empty = use MinIO cubes. */

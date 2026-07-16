@@ -1,6 +1,9 @@
 import React from "react";
 import {FileText, Github, Link} from 'lucide-react';
 import ConnectServer from "@/components/ConnectServer";
+// logo.png (22KB), not the same-looking black_logo4.svg (2.7MB — a 3000px
+// bitmap in an SVG wrapper); this renders at 48px.
+import logoUrl from "@/assets/images/logo.png";
 const Header: React.FC = () => {
 
     return (
@@ -13,7 +16,7 @@ const Header: React.FC = () => {
                     <div
                         className="w-12 h-12 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-lg flex items-center justify-center">
                         {/* <span className="text-white font-bold text-xl"></span> */}
-                        <img src="https://img.cellpheno.org/staticresorce/black_logo4.svg"></img>
+                        <img src={logoUrl} alt="Advanced Computational Medicine Laboratory logo" />
                     </div>
                     <h2 className="text-white font-comic">
                         <span className="block text-sm text-cyan-400">The Advanced Computational</span>

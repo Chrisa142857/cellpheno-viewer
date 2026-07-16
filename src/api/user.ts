@@ -1,5 +1,5 @@
 import type {BrainImage, BrainItem, BrainRes} from "@/types/user";
-import {MINIO_BUCKET_NAME, MINIO_ORIGIN, ZOOM_API_ORIGIN} from "@/configs/minio";
+import {DEMO_ORIGIN, MINIO_BUCKET_NAME, MINIO_ORIGIN, ZOOM_API_ORIGIN} from "@/configs/minio";
 
 const VOLUME_FILE_PATTERN = /\.(nii(\.gz)?|nrrd)$/i;
 
@@ -152,9 +152,24 @@ const fetchBrainImgFromZoomApi = async (): Promise<BrainRes> => {
     return { code: 2001, message: "success", sample_images };
 };
 
+// Static demo: brains pre-materialized on a public bucket (no live server).
+const fetchBrainImgFromDemo = async (): Promise<BrainRes> => {
+    const response = await fetch(`${DEMO_ORIGIN}/demo/manifest.json`);
+    if (!response.ok) throw new Error(`Failed to list demo brains: ${response.status}`);
+    const data = (await response.json()) as { brains?: string[] };
+    const sample_images: BrainItem[] = (data.brains ?? []).map((id) => ({
+        id,
+        images: [{ name: "density", url: `${DEMO_ORIGIN}/demo/${id}/density.nii.gz` } as BrainImage],
+    }));
+    return { code: 2001, message: "success", sample_images };
+};
+
 export const fetchBrainImg = async (): Promise<BrainRes> => {
     if (ZOOM_API_ORIGIN) {
         return fetchBrainImgFromZoomApi();
+    }
+    if (DEMO_ORIGIN) {
+        return fetchBrainImgFromDemo();
     }
     const objectNames = await listMinioObjectNames();
     return buildBrainRes(objectNames);

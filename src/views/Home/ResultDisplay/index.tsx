@@ -5,6 +5,9 @@ import {fetchBrainImg} from "@/api";
 import useBrainStore from "@/stores/brain.ts";
 import {BrainRes} from "@/types/user";
 import LoadingProgress from "@/components/LoadingProgress";
+// Inline style below, not a Tailwind bg-[url(...)]: an arbitrary Tailwind URL
+// can't reference this hashed import.
+import backUrl from "@/assets/back.png";
 
 type Status = "loading" | "ready" | "error";
 
@@ -44,7 +47,8 @@ const ResultDisplay: React.FC = () => {
 
     return (
         <div
-            className="flex flex-col p-4 bg-[url('https://img.cellpheno.org/staticresorce/back.png')] bg-contain bg-center min-h-screen items-center text-center">
+            className="flex flex-col p-4 bg-contain bg-center bg-no-repeat bg-slate-900 min-h-screen items-center text-center"
+            style={{backgroundImage: `url(${backUrl})`}}>
             {/* <h2 className="text-4xl font-bold mb-12 mt-40 text-gray-900">Results Overview</h2> */}
             <h2 className="text-3xl font-bold mb-12 mt-40 text-transparent"></h2>
             <div className="flex space-x-12">
