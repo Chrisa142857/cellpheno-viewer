@@ -47,22 +47,6 @@ interface zoomJsonResponse {
   tilesUrl?: string;
 }
 
-// 防抖函数
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function debounce<T extends (...args: any[]) => any>(
-  func: T,
-  wait: number
-): (...args: Parameters<T>) => void {
-  let timeout: ReturnType<typeof setTimeout> | null = null;
-
-  return function (...args: Parameters<T>) {
-    if (timeout) clearTimeout(timeout);
-    timeout = setTimeout(() => {
-      func(...args);
-    }, wait);
-  };
-}
-
 interface VolumeConfig {
   [key: string]: string;
 }
@@ -991,22 +975,22 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
     }
   }, [stitchDx, stitchDy, fetchZoomData]);
 
-  // 防抖处理的位置变化函数 (rapid clicks just supersede; in-flight downloads abort)
-  const debouncedFetchZoomData = useMemo(
-    () => debounce((coordinates: number[]) => fetchZoomData(coordinates), 300),
-    [fetchZoomData]
-  );
-
-  // 处理位置变化
+  // Clicking the brain only moves the crosshair now, so the main view can be
+  // reviewed freely without firing an expensive zoom fetch on every click. The
+  // "Zoom in here" button below is what actually loads the cubes.
   const handleLocationChange = useCallback(
     (newLocation: CrosshairLocation) => {
       setLocation(newLocation);
-      if (newLocation && newLocation.vox && newLocation.vox.length >= 3) {
-        debouncedFetchZoomData(newLocation.vox);
-      }
     },
-    [debouncedFetchZoomData]
+    []
   );
+
+  // Load the zoom cubes at the current crosshair — the explicit trigger that
+  // replaces auto-fetch-on-click.
+  const zoomHere = useCallback(() => {
+    const vox = location?.vox;
+    if (vox && vox.length >= 3) fetchZoomData(vox.slice(0, 3));
+  }, [location, fetchZoomData]);
 
   // 处理主视图体积变化
   const handleMainVolumeChange = useCallback(
@@ -1104,21 +1088,25 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
             overlayUrl={showTiles && tilesUrl ? tilesUrl : undefined}
             focusVox={focusVox}
           />
-          {!hasZoom && (
-            <div
-              className={`pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full border bg-slate-900/85 px-3 py-1 text-xs shadow-lg ${
-                zoomError
-                  ? "border-rose-500/40 text-rose-200/90"
-                  : "border-cyan-500/30 text-cyan-200/90"
-              }`}
+          <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 flex-col items-center gap-1.5">
+            {zoomError && (
+              <div className="rounded-full border border-rose-500/40 bg-slate-900/85 px-3 py-1 text-xs text-rose-200/90 shadow-lg">
+                Couldn’t load zoom — {zoomError}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={zoomHere}
+              disabled={isLoadingZoom || !(location?.vox && location.vox.length >= 3)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/50 bg-slate-900/85 px-4 py-1.5 text-sm font-medium text-cyan-200 shadow-lg transition-colors hover:enabled:bg-cyan-500 hover:enabled:text-slate-900 disabled:opacity-50"
             >
-              {zoomError
-                ? `Couldn’t load zoom — ${zoomError}`
-                : isLoadingZoom
-                  ? "Locating zoom…"
-                  : "Click the brain to open 1× / 8× / 16× zoom views"}
-            </div>
-          )}
+              {isLoadingZoom
+                ? "Locating zoom…"
+                : location?.vox && location.vox.length >= 3
+                  ? `${hasZoom ? "Re-zoom" : "Zoom in"} at ${zoomCoordLabel}`
+                  : "Click the brain, then Zoom in"}
+            </button>
+          </div>
         </div>
       </div>
 
