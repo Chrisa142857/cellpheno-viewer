@@ -600,7 +600,10 @@ const MainNiiView: React.FC<MainNiiViewProps> = React.memo(
         overlayUrl && dl.volumes.length > 0
           ? [
               ...dl.volumes,
-              { url: overlayUrl, colormap: "red", opacity: 0.7, cal_min: 0.5, cal_max: 1 } as NVRVolume,
+              // green, not red: NiiVue's crosshair is red ([1,0,0,1] by default),
+              // so red boundaries were indistinguishable from the cursor. Green
+              // is the furthest hue from it that still reads on the gray density map.
+              { url: overlayUrl, colormap: "green", opacity: 0.7, cal_min: 0.5, cal_max: 1 } as NVRVolume,
             ]
           : dl.volumes,
       [dl.volumes, overlayUrl]
