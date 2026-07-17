@@ -35,6 +35,24 @@ const yukonTunnelCmd = (onyen: string): string => {
     return `ssh -N -L 8090:localhost:8090 ${u}@yukon.acm.unc.edu -J ${u}@raptor.acm.unc.edu`;
 };
 
+const isLoopback = (origin: string): boolean =>
+    /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(origin);
+
+// Chrome gates https -> http://localhost behind a Local Network Access prompt,
+// and a denied prompt fails exactly like a dead tunnel (TypeError: Failed to
+// fetch). Ask the browser which it was instead of blaming the tunnel for both.
+// Older browsers don't expose the name and throw -> fall back to the tunnel hint.
+const localNetworkDenied = async (): Promise<boolean> => {
+    try {
+        const s = await navigator.permissions.query({
+            name: "local-network-access" as PermissionName,
+        });
+        return s.state === "denied";
+    } catch {
+        return false;
+    }
+};
+
 /**
  * "Connect to cellpheno server" dialog: point the viewer at a backend on the
  * user's own node at runtime (persisted in localStorage; saving reloads).
@@ -94,13 +112,21 @@ const ConnectServer: React.FC = () => {
             setTest({ status: "ok", detail: `Connected${backend} — reloading…` });
             return true;
         } catch {
-            setTest({
-                status: "error",
-                detail:
-                    `Could not reach ${origin}. Check that the SSH tunnel is running. (If this ` +
-                    `page is HTTPS and the server is plain HTTP, the browser blocks it — hence ` +
-                    `the tunnel to http://localhost.)`,
-            });
+            // Three different causes, three different fixes — don't blame the tunnel
+            // for a browser permission the user still has to grant.
+            let detail: string;
+            if (!isLoopback(origin)) {
+                detail =
+                    `Could not reach ${origin}. If this page is HTTPS and the server is plain ` +
+                    `HTTP, the browser blocks it (mixed content) — tunnel to http://localhost instead.`;
+            } else if (await localNetworkDenied()) {
+                detail =
+                    `The browser blocked this page from reaching ${origin}. Allow local network ` +
+                    `access for this site (the blocked icon in the address bar), then Connect & Test again.`;
+            } else {
+                detail = `Could not reach ${origin}. Check that the SSH tunnel is still running.`;
+            }
+            setTest({ status: "error", detail });
             return false;
         }
     };
