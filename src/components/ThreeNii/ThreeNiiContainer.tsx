@@ -583,10 +583,11 @@ interface MainNiiViewProps {
   volumes: NVRVolume[];
   onLocationChange: (location: CrosshairLocation) => void;
   overlayUrl?: string; // tile-boundary overlay (direct URL, not blob-prefetched)
+  focusVox?: number[] | null; // ?loc= deep link: put the crosshair here
 }
 
 const MainNiiView: React.FC<MainNiiViewProps> = React.memo(
-  ({ volumes, onLocationChange, overlayUrl }) => {
+  ({ volumes, onLocationChange, overlayUrl, focusVox }) => {
     const niivueRef = useRef<Niivue | null>(null);
     // Download with real progress, then render the in-memory blobs.
     const dl = useProgressiveVolumes(volumes, "main");
@@ -616,6 +617,25 @@ const MainNiiView: React.FC<MainNiiViewProps> = React.memo(
       // @ts-expect-error onLocationChange property is not defined in Niivue type definitions
       nv.onLocationChange = onLocationChange;
     };
+
+    // A shared ?loc= link must put the crosshair where the zoom views are looking.
+    // Without this the cursor sat at NiiVue's default centre while the zoom showed
+    // somewhere else entirely — the two disagreed. Runs once the volume has data
+    // (crosshairPos is a fraction of the volume, so it needs dims loaded).
+    useEffect(() => {
+      if (!focusVox || focusVox.length < 3 || decoding) return;
+      const nv = niivueRef.current;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const vols = (nv?.volumes ?? []) as any[];
+      if (!nv || !vols.length || !(vols[0]?.img?.length > 0)) return;
+      // Same three steps NiiVue's own moveCrosshairInVox uses, but absolute.
+      // createOnLocationChange re-fires onLocationChange -> fetchZoomData, which
+      // dedups on the identical coordinate, so this doesn't loop.
+      nv.scene.crosshairPos = nv.vox2frac(focusVox as [number, number, number]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (nv as any).createOnLocationChange();
+      nv.drawScene();
+    }, [focusVox, decoding]);
 
     // Only place the marker on a genuine tap. A drag (rotating the 3D render or
     // panning a slice) must NOT move it — otherwise the marker chased the cursor.
@@ -1026,13 +1046,16 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
 
   // Deep link: `?loc=x,y,z` (map voxel) auto-opens the zoom there once mounted,
   // so a location is shareable — and it's how the views get exercised in headless
-  // tests (NiiVue ignores synthetic canvas clicks).
+  // tests. focusVox also moves the main-view crosshair there, so the shared link
+  // shows the cursor on the spot the zoom is showing.
+  const [focusVox, setFocusVox] = useState<number[] | null>(null);
   useEffect(() => {
     const q = window.location.hash.split("?")[1] ?? window.location.search.slice(1);
     const loc = new URLSearchParams(q).get("loc");
     if (!loc) return;
     const v = loc.split(",").map(Number);
     if (v.length >= 3 && v.every((n) => Number.isFinite(n))) {
+      setFocusVox(v);
       const t = window.setTimeout(() => fetchZoomData(v), 1500);
       return () => window.clearTimeout(t);
     }
@@ -1076,6 +1099,7 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
             volumes={mainVolumesArray}
             onLocationChange={handleLocationChange}
             overlayUrl={showTiles && tilesUrl ? tilesUrl : undefined}
+            focusVox={focusVox}
           />
           {!hasZoom && (
             <div
