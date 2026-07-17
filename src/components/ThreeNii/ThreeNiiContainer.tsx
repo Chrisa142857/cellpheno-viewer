@@ -562,6 +562,32 @@ const LoadError: React.FC<{ msg: string; what: string }> = ({ msg, what }) => (
   </div>
 );
 
+// Legend for the density map: each voxel is a cell count, mapped onto the gray
+// ramp between min (black) and max (white). Pure CSS — the gradient is exactly
+// NiiVue's "gray" colormap, so no LUT read is needed. A midpoint tick helps read
+// intermediate values.
+const DensityColorbar: React.FC<{ min: number; max: number }> = ({ min, max }) => {
+  const fmt = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n)}`);
+  return (
+    <div className="pointer-events-none absolute right-2 top-1/2 z-10 flex -translate-y-1/2 items-stretch gap-1.5">
+      <div className="flex flex-col justify-between py-0.5 text-right text-[10px] font-medium leading-none text-slate-200 [text-shadow:0_1px_2px_rgba(0,0,0,0.9)]">
+        <span>{fmt(max)}</span>
+        <span>{fmt((min + max) / 2)}</span>
+        <span>{fmt(min)}</span>
+      </div>
+      <div
+        className="w-2.5 rounded-sm ring-1 ring-white/30"
+        style={{ height: "clamp(80px, 40%, 220px)", backgroundImage: "linear-gradient(to top, #000, #fff)" }}
+      />
+      <div className="flex items-center">
+        <span className="text-[9px] font-medium uppercase tracking-wide text-slate-300 [writing-mode:vertical-rl] [text-shadow:0_1px_2px_rgba(0,0,0,0.9)]">
+          cells / voxel
+        </span>
+      </div>
+    </div>
+  );
+};
+
 // 主视图组件
 interface MainNiiViewProps {
   volumes: NVRVolume[];
@@ -595,6 +621,21 @@ const MainNiiView: React.FC<MainNiiViewProps> = React.memo(
     );
     // Screen position (% of the view) of the last click -> "zoomed here" marker.
     const [pick, setPick] = useState<{ x: number; y: number } | null>(null);
+
+    // Cell-count range for the colorbar. Each density voxel is a cell count, and
+    // NiiVue maps cal_min..cal_max of the background volume onto the gray ramp, so
+    // those two values are the numbers the black and white ends actually mean.
+    // Read once the volume has decoded (cal_* are set during load).
+    const [range, setRange] = useState<{ min: number; max: number } | null>(null);
+    useEffect(() => {
+      if (decoding) return;
+      const nv = niivueRef.current;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const bg = (nv?.volumes ?? [])[0] as any;
+      if (bg && Number.isFinite(bg.cal_max) && bg.cal_max > bg.cal_min) {
+        setRange({ min: bg.cal_min, max: bg.cal_max });
+      }
+    }, [decoding, canvasVolumes]);
 
     const configNiivue = (nv: Niivue) => {
       niivueRef.current = nv;
@@ -655,6 +696,7 @@ const MainNiiView: React.FC<MainNiiViewProps> = React.memo(
             </span>
           </div>
         )}
+        {range && !dl.loading && !decoding && <DensityColorbar min={range.min} max={range.max} />}
         {dl.error && <LoadError msg={dl.error} what="the brain map" />}
         <LoadingProgress
           active={dl.loading || decoding}
