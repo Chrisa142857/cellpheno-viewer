@@ -866,7 +866,10 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
       Object.entries(volumeUrlsNew).forEach(([key, url]) => {
         const lower = url.toLowerCase();
         // Grayscale for continuous background/density volumes; label colormap otherwise.
-        const isGrayscale = lower.includes("samplebrain") || lower.includes("/densitymap/");
+        // Match "density" anywhere, not just the live "/densitymap/" path: the static
+        // demo serves the same volume as /demo/<brain>/density.nii.gz, and a
+        // path-shaped test rendered it with the label colormap (rainbow confetti).
+        const isGrayscale = lower.includes("samplebrain") || lower.includes("density");
         const colormap = isGrayscale ? "gray" : "roi_i256";
 
         initialVolumes[key] = {

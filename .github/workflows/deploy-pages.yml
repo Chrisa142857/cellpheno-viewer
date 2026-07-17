@@ -48,6 +48,10 @@ jobs:
           # (https://chrisa142857.github.io/cellpheno-viewer/). The app uses a hash
           # router, so all routes live under index.html and relative assets resolve.
           VITE_BASE: ./
+          # Public R2 bucket holding the pre-materialized showcase brain, so the
+          # viewer has something to show with no backend connected. Read-only and
+          # public by design — not a secret. Connecting a server still wins over it.
+          VITE_DEMO_ORIGIN: https://pub-520a41cd1d984232b3ef726c5bdafcf5.r2.dev
         run: pnpm build
       - uses: actions/configure-pages@v5
         with:
