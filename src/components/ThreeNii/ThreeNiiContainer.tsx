@@ -54,6 +54,7 @@ interface VolumeConfig {
 interface ModulateScalarProps {
   volumes: VolumeConfig;
   brainId: string;
+  description?: string; // sex · age · markers, for the main-view header
 }
 
 // 定义CrosshairLocation接口
@@ -866,6 +867,7 @@ const ZoomView: React.FC<ZoomViewProps> = React.memo(
 const ModulateScalar: React.FC<ModulateScalarProps> = ({
   volumes: volumeUrls,
   brainId,
+  description,
 }) => {
   // 主视图的体积
   const [mainVolumes, setMainVolumes] = useImmer<{ [key: string]: NVRVolume }>(
@@ -1105,7 +1107,7 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
       >
         <ViewHeader
           title="Main view"
-          subtitle="brain density"
+          subtitle={`${brainId}${description ? ` · ${description}` : " · brain density"}`}
           rightInfo={location?.string}
           layers={[
             ...Object.entries(mainVolumes).map(([key, vol]) => ({

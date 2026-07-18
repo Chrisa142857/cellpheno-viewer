@@ -8,20 +8,23 @@ const Preview: React.FC = () => {
   const [searchParams] = useSearchParams();
   const brainId = searchParams.get("brainId");
 
+  const brain = useMemo(
+    () => (brainId ? sampleImages.find(({ id }) => id === brainId) : undefined),
+    [brainId, sampleImages]
+  );
+
   const volumes = useMemo(() => {
-    if (!brainId) return null;
-    const brain = sampleImages.find(({ id }) => id === brainId);
     if (!brain) return null;
     return brain.images.reduce<Record<string, string>>((acc, item) => {
       acc[item.name] = item.url;
       return acc;
     }, {});
-  }, [brainId, sampleImages]);
+  }, [brain]);
 
   return (
     <div>
       {brainId && volumes ? (
-        <ModulateScalar volumes={volumes} brainId={brainId} />
+        <ModulateScalar volumes={volumes} brainId={brainId} description={brain?.description} />
       ) : (
         <p>Not Found!</p>
       )}
