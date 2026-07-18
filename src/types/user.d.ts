@@ -7,6 +7,8 @@ export interface BrainRes  {
 export interface BrainItem {
     id: string
     images: BrainImage[]
+    /** Optional human-readable subtitle (sex · age · markers), e.g. for the demo brain. */
+    description?: string
 }
 
 export interface BrainImage {

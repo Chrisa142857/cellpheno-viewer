@@ -153,12 +153,19 @@ const fetchBrainImgFromZoomApi = async (): Promise<BrainRes> => {
 };
 
 // Static demo: brains pre-materialized on a public bucket (no live server).
+// The manifest may carry per-brain metadata (sex/age/markers) -> a subtitle.
 const fetchBrainImgFromDemo = async (): Promise<BrainRes> => {
     const response = await fetch(`${DEMO_ORIGIN}/demo/manifest.json`);
     if (!response.ok) throw new Error(`Failed to list demo brains: ${response.status}`);
-    const data = (await response.json()) as { brains?: string[] };
+    const data = (await response.json()) as {
+        brains?: string[];
+        meta?: Record<string, { sex?: string; age?: string; markers?: string; date?: string }>;
+    };
+    const describe = (m?: { sex?: string; age?: string; markers?: string }) =>
+        m ? [m.sex, m.age, m.markers].filter(Boolean).join(" · ") : undefined;
     const sample_images: BrainItem[] = (data.brains ?? []).map((id) => ({
         id,
+        description: describe(data.meta?.[id]),
         images: [{ name: "density", url: `${DEMO_ORIGIN}/demo/${id}/density.nii.gz` } as BrainImage],
     }));
     return { code: 2001, message: "success", sample_images };

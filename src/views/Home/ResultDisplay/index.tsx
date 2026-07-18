@@ -79,15 +79,20 @@ const ResultDisplay: React.FC = () => {
 
                     {status === "ready" && brains.length > 0 && (
                         <ul className="space-y-2 max-h-[400px] overflow-y-auto custom-scrollbar">
-                            {brains.map((brain) => (
+                            {sampleImages.map((brain) => (
                                 <li
-                                    key={brain}
-                                    className="cursor-pointer hover:bg-indigo-200 text-3xl text-gray-300
+                                    key={brain.id}
+                                    className="cursor-pointer hover:bg-indigo-200 text-gray-300 group
                                              transition-all duration-200 py-2 px-4 rounded-lg
                                              hover:text-indigo-900"
-                                    onClick={() => openFilePreview(brain)}
+                                    onClick={() => openFilePreview(brain.id)}
                                 >
-                                    {brain}
+                                    <div className="text-3xl">{brain.id}</div>
+                                    {brain.description && (
+                                        <div className="text-sm text-gray-400 group-hover:text-indigo-800">
+                                            {brain.description}
+                                        </div>
+                                    )}
                                 </li>
                             ))}
                         </ul>
