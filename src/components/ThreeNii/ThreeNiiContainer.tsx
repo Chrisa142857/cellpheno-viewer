@@ -41,11 +41,24 @@ const ZOOM_OPTIONS: NVROptions = {
 const ZOOM_SCALES = [1, 8, 16];
 const ZOOM_DETAIL_SCALE = 1;
 
+// One raw fluorescence channel. topro (nuclei) leads as the gray base; the other
+// stains are tinted so the zoom view reads as a colour composite.
+interface RawChannel {
+  name: string; // stain key, e.g. "topro"
+  color: string; // NiiVue colormap ("gray" | "green" | "red" | ...)
+  url: string;
+}
+
 interface zoomJsonResponse {
   imgUrl: string[];
   nisUrl: string[];
+  channels?: RawChannel[]; // topro-first; absent on older backends -> derive
   tilesUrl?: string;
 }
+
+// Fallback tint when a channel carries no colour (legacy data): topro-only stays
+// gray. Kept tiny; the backend/manifest is the real source of colours.
+const channelLabel = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
 
 interface VolumeConfig {
   [key: string]: string;
@@ -79,8 +92,12 @@ const describeFetchError = (err: unknown): string => {
   return /Failed to fetch|NetworkError|Load failed/i.test(msg) ? "Server unreachable" : msg;
 };
 
-const demoManifestCache: Record<string, Promise<{ grid: number[][] }>> = {};
-const getDemoManifest = (brain: string): Promise<{ grid: number[][] }> =>
+interface DemoManifest {
+  grid: number[][];
+  channels?: { name: string; color: string }[];
+}
+const demoManifestCache: Record<string, Promise<DemoManifest>> = {};
+const getDemoManifest = (brain: string): Promise<DemoManifest> =>
   (demoManifestCache[brain] ??= fetch(
     `${DEMO_ORIGIN}/demo/${encodeURIComponent(brain)}/manifest.json`
   ).then((r) => r.json()));
@@ -92,7 +109,7 @@ const fetchZoomVolumes = async (
   scale: number = 1,
   dx: number = 0,
   dy: number = 0
-): Promise<{ volumes: VolumeConfig; tilesUrl: string; error?: string }> => {
+): Promise<{ channels: RawChannel[]; nisUrl: string | null; tilesUrl: string; error?: string }> => {
   const xStr = (Math.floor(coordinates[0] / cubesz_xy) * cubesz_xy)
     .toString()
     .padStart(3, "0");
@@ -126,7 +143,7 @@ const fetchZoomVolumes = async (
     try {
       const man = await getDemoManifest(brainId);
       const grid = man.grid ?? [];
-      if (!grid.length) return { volumes: {}, tilesUrl: "" };
+      if (!grid.length) return { channels: [], nisUrl: null, tilesUrl: "" };
       let best = grid[0];
       let bd = Infinity;
       for (const c of grid) {
@@ -139,16 +156,24 @@ const fetchZoomVolumes = async (
       const p = (n: number) => String(n).padStart(3, "0");
       const cell = `${p(best[0])}_${p(best[1])}_${p(best[2])}`;
       const b = `${DEMO_ORIGIN}/demo/${encodeURIComponent(brainId)}`;
+      // Newer bundles list per-stain channels (s<scale>/<cell>_raw_<name>.nii.gz,
+      // topro-first). Older ones only have the single topro _raw.nii.gz -- fall
+      // back so the viewer keeps working before/without a re-precompute.
+      const channels: RawChannel[] = man.channels?.length
+        ? man.channels.map((c) => ({
+            name: c.name,
+            color: c.color,
+            url: `${b}/s${scale}/${cell}_raw_${c.name}.nii.gz`,
+          }))
+        : [{ name: "topro", color: "gray", url: `${b}/s${scale}/${cell}_raw.nii.gz` }];
       return {
-        volumes: {
-          rawImage: `${b}/s${scale}/${cell}_raw.nii.gz`,
-          nis3d: `${b}/s${scale}/${cell}_nis.nii.gz`,
-        },
+        channels,
+        nisUrl: `${b}/s${scale}/${cell}_nis.nii.gz`,
         tilesUrl: `${b}/tiles/${cell}.nii.gz`,
       };
     } catch (e) {
       console.error("demo fetch failed", e);
-      return { volumes: {}, tilesUrl: "", error: describeFetchError(e) };
+      return { channels: [], nisUrl: null, tilesUrl: "", error: describeFetchError(e) };
     }
   }
 
@@ -162,39 +187,26 @@ const fetchZoomVolumes = async (
     const jsonResponse = await fetch(jsonUrl);
     const jsonData = (await jsonResponse.json()) as zoomJsonResponse;
 
-    const res: { [key: string]: string } = {};
+    // Newer /zoom/info returns tinted channels topro-first; older backends (and
+    // the legacy MinIO json) only have imgUrl -- treat those as a single gray
+    // topro channel so the composite degrades to today's one-channel view.
+    const abs = (u: string) => (/^https?:/i.test(u) ? u : `${parentUrl}${u}`);
+    const channels: RawChannel[] = jsonData.channels?.length
+      ? jsonData.channels.map((c) => ({ name: c.name, color: c.color, url: abs(c.url) }))
+      : (jsonData.imgUrl ?? []).map((u, i) => ({
+          name: i === 0 ? "topro" : `ch${i}`,
+          color: i === 0 ? "gray" : "green",
+          url: abs(u),
+        }));
 
-    jsonData.imgUrl.forEach((url) => {
-      res[
-        url
-          .split("/")
-          .pop()
-          ?.split(".")[0]
-          .split("_")
-          .slice(1)
-          .join("_") as string
-      ] = `${parentUrl}${url}`;
-    });
-
-    jsonData.nisUrl.forEach((url) => {
-      res[
-        url
-          .split("/")
-          .pop()
-          ?.split(".")[0]
-          .split("_")
-          .slice(1)
-          .join("_") as string
-      ] = `${parentUrl}${url}`;
-    });
-
-    const tilesUrl = jsonData.tilesUrl ? `${parentUrl}${jsonData.tilesUrl}` : "";
-    return { volumes: res, tilesUrl };
+    const nisUrl = jsonData.nisUrl?.[0] ? abs(jsonData.nisUrl[0]) : null;
+    const tilesUrl = jsonData.tilesUrl ? abs(jsonData.tilesUrl) : "";
+    return { channels, nisUrl, tilesUrl };
   } catch (error) {
     console.error("Error fetching zoom volumes:", error);
     // Don't swallow: an empty result is indistinguishable from "no data at this
     // spot", which made a server outage look like a dead click.
-    return { volumes: {}, tilesUrl: "", error: describeFetchError(error) };
+    return { channels: [], nisUrl: null, tilesUrl: "", error: describeFetchError(error) };
   }
 };
 
@@ -499,6 +511,10 @@ function useProgressiveVolumes(source: NVRVolume[], estKey = "zoom1"): Progressi
         report();
         const blobUrl = URL.createObjectURL(new Blob(chunks));
         createdBlobs.push(blobUrl);
+        // Publish each blob as it lands (not at the end) so the view renders the
+        // channels progressively -- topro (first in `source`) appears while the
+        // tinted stains are still downloading.
+        if (!cancelled) setBlobMap((prev) => ({ ...prev, [v.url]: blobUrl }));
         return [v.url, blobUrl];
       })
     )
@@ -532,21 +548,19 @@ function useProgressiveVolumes(source: NVRVolume[], estKey = "zoom1"): Progressi
 
   // Derive rendered volumes from the CURRENT source props (opacity, colormap, …)
   // + the downloaded blob URL, so control-panel changes apply without a
-  // re-download. Empty until every source URL has been fetched.
-  const ready =
-    source.length > 0 &&
-    source.every((v) => !/^https?:/i.test(v.url) || blobMap[v.url] !== undefined);
+  // re-download. Each volume appears as soon as ITS blob is ready (progressive),
+  // rather than waiting for the whole set -- so the topro base shows first.
   const volumes = useMemo(
     () =>
-      ready
-        ? // Drop hidden (opacity 0) volumes entirely so they disappear from the
-          // 3D render too -- NiiVue's volume raycast ignores per-volume 2D
-          // opacity, so merely setting opacity 0 leaves them visible in 3D.
-          source
-            .filter((v) => (v.opacity ?? 1) > 0)
-            .map((v) => ({ ...v, url: blobMap[v.url] ?? v.url, name: filenameFromUrl(v.url) }))
-        : [],
-    [source, blobMap, ready]
+      // Drop hidden (opacity 0) volumes entirely so they disappear from the 3D
+      // render too -- NiiVue's volume raycast ignores per-volume 2D opacity, so
+      // merely setting opacity 0 leaves them visible in 3D. Also drop any whose
+      // blob hasn't landed yet (a raw http url handed to NiiVue would refetch).
+      source
+        .filter((v) => (v.opacity ?? 1) > 0)
+        .filter((v) => !/^https?:/i.test(v.url) || blobMap[v.url] !== undefined)
+        .map((v) => ({ ...v, url: blobMap[v.url] ?? v.url, name: filenameFromUrl(v.url) })),
+    [source, blobMap]
   );
 
   return { volumes, loading: prog.loading, progress: prog.progress, etaSec: prog.etaSec, error };
@@ -713,13 +727,13 @@ const MainNiiView: React.FC<MainNiiViewProps> = React.memo(
 
 // 放大视图组件: one collapsible multi-resolution view (its own raw/seg controls).
 interface ZoomViewCtl {
-  raw: boolean;
+  chan: Record<string, boolean>; // per-stain visibility, keyed by channel name
   seg: boolean;
   segOpacity: number;
 }
 interface ZoomViewProps {
   scale: number;
-  rawUrl: string | null;
+  channels: RawChannel[];
   nisUrl: string | null;
   collapsed: boolean;
   ctl: ZoomViewCtl;
@@ -776,17 +790,23 @@ const ZoomCanvas: React.FC<{ volumes: NVRVolume[]; niivueRef: React.MutableRefOb
   };
 
 const ZoomView: React.FC<ZoomViewProps> = React.memo(
-  ({ scale, rawUrl, nisUrl, collapsed, ctl, coordLabel, onToggleCollapse, onCtl }) => {
+  ({ scale, channels, nisUrl, collapsed, ctl, coordLabel, onToggleCollapse, onCtl }) => {
     const niivueRef = useRef<Niivue | null>(null);
     // Source volumes; opacity drives visibility (downloaded regardless so toggles
     // are instant, and a hidden volume is dropped from the render in 3D too).
+    // Channels are topro-first: the gray nuclei base is opaque, the tinted stains
+    // overlay semi-transparent so they composite instead of hiding each other.
     const source = useMemo(() => {
       const arr: NVRVolume[] = [];
-      if (rawUrl) arr.push({ url: rawUrl, colormap: "gray", opacity: ctl.raw ? 1 : 0 });
+      channels.forEach((c) => {
+        const visible = ctl.chan[c.name] ?? true;
+        const base = c.color === "gray" ? 1 : 0.5;
+        arr.push({ url: c.url, colormap: c.color, opacity: visible ? base : 0 });
+      });
       if (nisUrl)
         arr.push({ url: nisUrl, colormap: "roi_i256", opacity: ctl.seg ? ctl.segOpacity : 0 });
       return arr;
-    }, [rawUrl, nisUrl, ctl.raw, ctl.seg, ctl.segOpacity]);
+    }, [channels, nisUrl, ctl.chan, ctl.seg, ctl.segOpacity]);
 
     // Prefetch runs even when collapsed, so the cube loads in the background.
     const dl = useProgressiveVolumes(source, `zoom${scale}`);
@@ -829,7 +849,11 @@ const ZoomView: React.FC<ZoomViewProps> = React.memo(
           }
           rightInfo={collapsed ? undefined : coordLabel}
           layers={[
-            { label: "Raw", visible: ctl.raw, onToggle: (v) => onCtl({ raw: v }) },
+            ...channels.map((c) => ({
+              label: channelLabel(c.name),
+              visible: ctl.chan[c.name] ?? true,
+              onToggle: (v: boolean) => onCtl({ chan: { ...ctl.chan, [c.name]: v } }),
+            })),
             { label: "Seg", visible: ctl.seg, onToggle: (v) => onCtl({ seg: v }) },
           ]}
           opacity={ctl.segOpacity}
@@ -913,7 +937,7 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
 
   // One zoom view per scale: the stitched raw/nis cube URLs + collapsed flag.
   const [zoomViews, setZoomViews] = useImmer<
-    Record<number, { raw: string | null; nis: string | null; collapsed: boolean }>
+    Record<number, { channels: RawChannel[]; nis: string | null; collapsed: boolean }>
   >({});
   // Per-view controls (raw/seg visibility + segmentation opacity).
   const [zoomCtl, setZoomCtl] = useImmer<Record<number, ZoomViewCtl>>({});
@@ -949,20 +973,14 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
       try {
         const results = await Promise.all(
           ZOOM_SCALES.map(async (scale) => {
-            const { volumes: cfg, tilesUrl: tUrl, error: err } = await fetchZoomVolumes(
+            const { channels, nisUrl, tilesUrl: tUrl, error: err } = await fetchZoomVolumes(
               coordinates,
               brainId,
               scale,
               stitchDx,
               stitchDy
             );
-            let raw: string | null = null;
-            let nis: string | null = null;
-            Object.entries(cfg).forEach(([key, u]) => {
-              if (key.includes("rawImage")) raw = u;
-              else if (key.includes("nis")) nis = u;
-            });
-            return { scale, raw, nis, tUrl, err };
+            return { scale, channels, nis: nisUrl, tUrl, err };
           })
         );
         // Stale-request guard: a newer click superseded this one.
@@ -971,7 +989,7 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
         // tile(s) the clicked spot is actually in (<=4 at a corner/overlap), not
         // the many tiles a wide 16x window would span.
         setTilesUrl(results.find((r) => r.scale === ZOOM_DETAIL_SCALE)?.tUrl ?? results[0]?.tUrl ?? "");
-        if (results.every((r) => !r.raw && !r.nis)) {
+        if (results.every((r) => !r.channels.length && !r.nis)) {
           // Distinguish an outage from a genuinely empty spot, so a click during
           // an outage reports the outage instead of appearing to do nothing.
           setZoomError(results.find((r) => r.err)?.err ?? null);
@@ -988,17 +1006,22 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
             prevCollapsed[Number(k)] = draft[Number(k)].collapsed;
             delete draft[Number(k)];
           });
-          for (const { scale, raw, nis } of results) {
+          for (const { scale, channels, nis } of results) {
             draft[scale] = {
-              raw,
+              channels,
               nis,
               collapsed: prevCollapsed[scale] ?? scale !== ZOOM_DETAIL_SCALE,
             };
           }
         });
+        // Default every channel visible; keep the user's toggles across clicks.
+        const chanNames = results.flatMap((r) => r.channels.map((c) => c.name));
         setZoomCtl((draft) => {
           for (const scale of ZOOM_SCALES) {
-            if (!draft[scale]) draft[scale] = { raw: true, seg: true, segOpacity: 0.6 };
+            const prev = draft[scale];
+            const chan = { ...(prev?.chan ?? {}) };
+            for (const name of chanNames) if (chan[name] === undefined) chan[name] = true;
+            draft[scale] = { chan, seg: prev?.seg ?? true, segOpacity: prev?.segOpacity ?? 0.6 };
           }
         });
       } catch (error) {
@@ -1053,7 +1076,7 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
   );
 
   const hasZoom = useMemo(
-    () => ZOOM_SCALES.some((s) => zoomViews[s] && (zoomViews[s].raw || zoomViews[s].nis)),
+    () => ZOOM_SCALES.some((s) => zoomViews[s] && (zoomViews[s].channels.length > 0 || zoomViews[s].nis)),
     [zoomViews]
   );
 
@@ -1069,7 +1092,7 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
   const patchCtl = useCallback(
     (scale: number, patch: Partial<ZoomViewCtl>) => {
       setZoomCtl((draft) => {
-        draft[scale] = { ...(draft[scale] ?? { raw: true, seg: true, segOpacity: 0.6 }), ...patch };
+        draft[scale] = { ...(draft[scale] ?? { chan: {}, seg: true, segOpacity: 0.6 }), ...patch };
       });
     },
     [setZoomCtl]
@@ -1202,15 +1225,15 @@ const ModulateScalar: React.FC<ModulateScalarProps> = ({
           )}
           {ZOOM_SCALES.map((scale) => {
             const v = zoomViews[scale];
-            if (!v || (!v.raw && !v.nis)) return null;
+            if (!v || (!v.channels.length && !v.nis)) return null;
             return (
               <ZoomView
                 key={scale}
                 scale={scale}
-                rawUrl={v.raw}
+                channels={v.channels}
                 nisUrl={v.nis}
                 collapsed={v.collapsed}
-                ctl={zoomCtl[scale] ?? { raw: true, seg: true, segOpacity: 0.6 }}
+                ctl={zoomCtl[scale] ?? { chan: {}, seg: true, segOpacity: 0.6 }}
                 coordLabel={zoomCoordLabel}
                 onToggleCollapse={() => toggleCollapse(scale)}
                 onCtl={(patch) => patchCtl(scale, patch)}
