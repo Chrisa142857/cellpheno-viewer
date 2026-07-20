@@ -796,6 +796,9 @@ const ZoomView: React.FC<ZoomViewProps> = React.memo(
     // are instant, and a hidden volume is dropped from the render in 3D too).
     // Channels are topro-first: the gray nuclei base is opaque, the tinted stains
     // overlay semi-transparent so they composite instead of hiding each other.
+    // Seg is only legible at the 1x detail scale; at 8x/16x the labels are too
+    // small to read, so drop the layer (and its pill) from the context views.
+    const showSeg = scale === ZOOM_DETAIL_SCALE;
     const source = useMemo(() => {
       const arr: NVRVolume[] = [];
       channels.forEach((c) => {
@@ -803,10 +806,10 @@ const ZoomView: React.FC<ZoomViewProps> = React.memo(
         const base = c.color === "gray" ? 1 : 0.5;
         arr.push({ url: c.url, colormap: c.color, opacity: visible ? base : 0 });
       });
-      if (nisUrl)
+      if (nisUrl && showSeg)
         arr.push({ url: nisUrl, colormap: "roi_i256", opacity: ctl.seg ? ctl.segOpacity : 0 });
       return arr;
-    }, [channels, nisUrl, ctl.chan, ctl.seg, ctl.segOpacity]);
+    }, [channels, nisUrl, showSeg, ctl.chan, ctl.seg, ctl.segOpacity]);
 
     // Prefetch runs even when collapsed, so the cube loads in the background.
     const dl = useProgressiveVolumes(source, `zoom${scale}`);
@@ -854,10 +857,12 @@ const ZoomView: React.FC<ZoomViewProps> = React.memo(
               visible: ctl.chan[c.name] ?? true,
               onToggle: (v: boolean) => onCtl({ chan: { ...ctl.chan, [c.name]: v } }),
             })),
-            { label: "Seg", visible: ctl.seg, onToggle: (v) => onCtl({ seg: v }) },
+            ...(showSeg
+              ? [{ label: "Seg", visible: ctl.seg, onToggle: (v: boolean) => onCtl({ seg: v }) }]
+              : []),
           ]}
-          opacity={ctl.segOpacity}
-          onOpacity={(v) => onCtl({ segOpacity: v })}
+          opacity={showSeg ? ctl.segOpacity : undefined}
+          onOpacity={showSeg ? (v) => onCtl({ segOpacity: v }) : undefined}
           opacityDisabled={!ctl.seg}
           onZoomIn={collapsed ? undefined : () => applyZoom((z) => z * 1.3)}
           onZoomOut={collapsed ? undefined : () => applyZoom((z) => z / 1.3)}
